@@ -29,23 +29,28 @@ export default function WatermarkRemover() {
   }
 
   // Dessine le rectangle du watermark directement sur la vidéo en pause
+  // Supporte à la fois souris (desktop) et tactile (mobile)
   function getRelativeCoords(e) {
     const rect = videoRef.current.getBoundingClientRect();
     const scaleX = videoRef.current.videoWidth / rect.width;
     const scaleY = videoRef.current.videoHeight / rect.height;
+    // e.touches existe pour les événements tactiles, sinon on utilise l'événement souris directement
+    const point = e.touches && e.touches.length > 0 ? e.touches[0] : e;
     return {
-      x: Math.round((e.clientX - rect.left) * scaleX),
-      y: Math.round((e.clientY - rect.top) * scaleY),
+      x: Math.round((point.clientX - rect.left) * scaleX),
+      y: Math.round((point.clientY - rect.top) * scaleY),
     };
   }
 
-  function handleMouseDown(e) {
+  function handleDrawStart(e) {
+    e.preventDefault(); // empêche le scroll de la page pendant le dessin tactile
     setDrawing(true);
     setStartPoint(getRelativeCoords(e));
   }
 
-  function handleMouseMove(e) {
+  function handleDrawMove(e) {
     if (!drawing || !startPoint) return;
+    e.preventDefault();
     const current = getRelativeCoords(e);
     setBox({
       x: Math.min(startPoint.x, current.x),
@@ -55,7 +60,7 @@ export default function WatermarkRemover() {
     });
   }
 
-  function handleMouseUp() {
+  function handleDrawEnd() {
     setDrawing(false);
   }
 
@@ -134,15 +139,31 @@ export default function WatermarkRemover() {
             Mets la vidéo en pause sur une frame avec le watermark visible,
             puis dessine un rectangle dessus.
           </p>
-          <video
-            ref={videoRef}
-            src={previewUrl}
-            controls
-            className="w-full border rounded cursor-crosshair"
-            onMouseDown={handleMouseDown}
-            onMouseMove={handleMouseMove}
-            onMouseUp={handleMouseUp}
-          />
+          <div className="relative">
+            <video
+              ref={videoRef}
+              src={previewUrl}
+              controls
+              className="w-full border rounded cursor-crosshair touch-none"
+              onMouseDown={handleDrawStart}
+              onMouseMove={handleDrawMove}
+              onMouseUp={handleDrawEnd}
+              onTouchStart={handleDrawStart}
+              onTouchMove={handleDrawMove}
+              onTouchEnd={handleDrawEnd}
+            />
+            {box && videoRef.current && (
+              <div
+                className="absolute border-2 border-red-500 bg-red-500/20 pointer-events-none"
+                style={{
+                  left: `${(box.x / videoRef.current.videoWidth) * 100}%`,
+                  top: `${(box.y / videoRef.current.videoHeight) * 100}%`,
+                  width: `${(box.w / videoRef.current.videoWidth) * 100}%`,
+                  height: `${(box.h / videoRef.current.videoHeight) * 100}%`,
+                }}
+              />
+            )}
+          </div>
           {box && (
             <p className="text-sm text-gray-500">
               Zone sélectionnée : x={box.x}, y={box.y}, w={box.w}, h={box.h}
