@@ -8,7 +8,9 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://ton-backend.onrender
 export default function WatermarkRemover() {
   const [videoFile, setVideoFile] = useState(null);
   const [previewUrl, setPreviewUrl] = useState(null);
-  const [box, setBox] = useState(null); // {x, y, w, h}
+  const [frameCaptured, setFrameCaptured] = useState(false);
+  const [naturalSize, setNaturalSize] = useState({ w: 0, h: 0 });
+  const [box, setBox] = useState(null); // {x, y, w, h} en pixels réels de la vidéo
   const [drawing, setDrawing] = useState(false);
   const [startPoint, setStartPoint] = useState(null);
   const [status, setStatus] = useState("idle"); // idle | uploading | processing | done | error
@@ -23,18 +25,37 @@ export default function WatermarkRemover() {
     if (!file) return;
     setVideoFile(file);
     setPreviewUrl(URL.createObjectURL(file));
+    setFrameCaptured(false);
     setBox(null);
     setStatus("idle");
     setResultUrl(null);
   }
 
-  // Dessine le rectangle du watermark directement sur la vidéo en pause
-  // Supporte à la fois souris (desktop) et tactile (mobile)
+  // Capture la frame actuelle de la vidéo (là où l'utilisateur l'a mise en pause)
+  // et la dessine sur un canvas statique. Ça évite tout conflit avec les
+  // contrôles natifs du <video>, qui interceptent le tactile sur mobile.
+  function captureFrame() {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!video || !canvas) return;
+
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    setNaturalSize({ w: video.videoWidth, h: video.videoHeight });
+
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(video, 0, 0, video.videoWidth, video.videoHeight);
+
+    setFrameCaptured(true);
+    setBox(null);
+  }
+
+  // Coordonnées relatives au canvas (souris ou tactile), converties en pixels réels de la vidéo
   function getRelativeCoords(e) {
-    const rect = videoRef.current.getBoundingClientRect();
-    const scaleX = videoRef.current.videoWidth / rect.width;
-    const scaleY = videoRef.current.videoHeight / rect.height;
-    // e.touches existe pour les événements tactiles, sinon on utilise l'événement souris directement
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
     const point = e.touches && e.touches.length > 0 ? e.touches[0] : e;
     return {
       x: Math.round((point.clientX - rect.left) * scaleX),
@@ -43,7 +64,7 @@ export default function WatermarkRemover() {
   }
 
   function handleDrawStart(e) {
-    e.preventDefault(); // empêche le scroll de la page pendant le dessin tactile
+    e.preventDefault();
     setDrawing(true);
     setStartPoint(getRelativeCoords(e));
   }
@@ -65,8 +86,8 @@ export default function WatermarkRemover() {
   }
 
   async function handleSubmit() {
-    if (!videoFile || !box) {
-      setErrorMsg("Sélectionne une vidéo et dessine la zone du watermark");
+    if (!videoFile || !box || box.w < 2 || box.h < 2) {
+      setErrorMsg("Sélectionne une vidéo, capture une frame, et dessine la zone du watermark");
       return;
     }
 
@@ -113,7 +134,6 @@ export default function WatermarkRemover() {
           setStatus("error");
           setErrorMsg(data.error || "Le traitement a échoué");
         }
-        // sinon on continue à poller (queued / processing)
       } catch (err) {
         clearInterval(interval);
         setStatus("error");
@@ -133,17 +153,35 @@ export default function WatermarkRemover() {
         className="block w-full text-sm"
       />
 
-      {previewUrl && (
+      {previewUrl && !frameCaptured && (
         <div className="space-y-2">
           <p className="text-sm text-gray-600">
-            Mets la vidéo en pause sur une frame avec le watermark visible,
-            puis dessine un rectangle dessus.
+            Étape 1 : mets la vidéo en pause sur une frame où le watermark est visible,
+            puis appuie sur "Capturer cette frame".
           </p>
-          <div className="relative">
-            <video
-              ref={videoRef}
-              src={previewUrl}
-              controls
+          <video
+            ref={videoRef}
+            src={previewUrl}
+            controls
+            className="w-full border rounded"
+          />
+          <button
+            onClick={captureFrame}
+            className="px-4 py-2 bg-blue-600 text-white rounded"
+          >
+            Capturer cette frame
+          </button>
+        </div>
+      )}
+
+      {frameCaptured && (
+        <div className="space-y-2">
+          <p className="text-sm text-gray-600">
+            Étape 2 : dessine un rectangle sur le watermark (glisse ton doigt ou la souris).
+          </p>
+          <div className="relative inline-block w-full">
+            <canvas
+              ref={canvasRef}
               className="w-full border rounded cursor-crosshair touch-none"
               onMouseDown={handleDrawStart}
               onMouseMove={handleDrawMove}
@@ -152,14 +190,14 @@ export default function WatermarkRemover() {
               onTouchMove={handleDrawMove}
               onTouchEnd={handleDrawEnd}
             />
-            {box && videoRef.current && (
+            {box && naturalSize.w > 0 && (
               <div
                 className="absolute border-2 border-red-500 bg-red-500/20 pointer-events-none"
                 style={{
-                  left: `${(box.x / videoRef.current.videoWidth) * 100}%`,
-                  top: `${(box.y / videoRef.current.videoHeight) * 100}%`,
-                  width: `${(box.w / videoRef.current.videoWidth) * 100}%`,
-                  height: `${(box.h / videoRef.current.videoHeight) * 100}%`,
+                  left: `${(box.x / naturalSize.w) * 100}%`,
+                  top: `${(box.y / naturalSize.h) * 100}%`,
+                  width: `${(box.w / naturalSize.w) * 100}%`,
+                  height: `${(box.h / naturalSize.h) * 100}%`,
                 }}
               />
             )}
@@ -169,12 +207,18 @@ export default function WatermarkRemover() {
               Zone sélectionnée : x={box.x}, y={box.y}, w={box.w}, h={box.h}
             </p>
           )}
+          <button
+            onClick={() => { setFrameCaptured(false); setBox(null); }}
+            className="text-sm text-blue-600 underline"
+          >
+            Reprendre une autre frame
+          </button>
         </div>
       )}
 
       <button
         onClick={handleSubmit}
-        disabled={!videoFile || !box || status === "uploading" || status === "processing"}
+        disabled={!videoFile || !box || box.w < 2 || box.h < 2 || status === "uploading" || status === "processing"}
         className="px-4 py-2 bg-black text-white rounded disabled:opacity-40"
       >
         {status === "uploading" && "Envoi..."}
